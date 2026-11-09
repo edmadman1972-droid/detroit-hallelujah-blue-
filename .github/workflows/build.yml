@@ -1,0 +1,73 @@
+name: Build plug-ins
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Universal - Apple Silicon + Intel)
+            os: macos-latest
+            artifact: DetroitHallelujah-macOS
+          - name: Windows (x64)
+            os: windows-latest
+            artifact: DetroitHallelujah-Windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Run DSP tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/package_mac.sh build Release
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package_windows.ps1 -BuildDir build -Config Release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.pkg
+            artifacts/**/*Installer*.exe
